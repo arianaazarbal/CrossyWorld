@@ -1,0 +1,504 @@
+include reactors
+include shared-gdrive("sprite-lib", "1oXiADjdC5WMA_iljrNdg7Dvo2mJC73_N")
+include image
+include shared-gdrive("contfracs-definitions.arr", "1fFz3TaWdZgIfNxSGVYx0UQz_GXOBIVsc")
+
+#|
+   This game is kind of like crossy roads! It produces an infinite stream of roads/sidewalks
+   and has blue and red balls "driving" across the roads. You must get as high a score as you
+   can by moving forward (using the up or w key; you can also navigate left, right, and down 
+   using those keys or a, s, d). If you collide with a driver, or don't move fast enough 
+   (your player reaches the bottom of 
+   the screen, you lose. The game demands you go ever-faster as your score increases.
+   Right now,the stream capabilities aren't really maximized but in the future I could 
+   place bushes or something on the sidewalks at random points each time, easily. 
+   The entry of cars is randomized, so it can't be predicted. 
+|#
+
+WIDTH = 1000
+HEIGHT = 700
+HALF-WIDTH = 500
+HALF-HEIGHT = 350
+
+ROAD-1-Y-POS = 550
+ROAD-2-Y-POS = 900
+ROAD-3-Y-POS = 850
+
+ROAD-WIDTH = 1050
+ROAD-HEIGHT = 50
+HALF-ROAD-HEIGHT = 25
+HIDDEN-LEFT = -20
+HIDDEN-RIGHT = 1020
+
+SCORE-BY = 1
+MOVE-BY = ROAD-HEIGHT
+BASE-DOWN-SHIFT = 0.2
+SCORE-SCALING-SHIFT-FACTOR = 0.3
+BASE-DX = 5
+
+RANDOM-SIZE = 50
+EXTENDED-HEIGHT = HEIGHT + (8 * ROAD-HEIGHT)
+HALF-EXT-HEIGHT = EXTENDED-HEIGHT / 2
+CENTER-PLUS-THRESHOLD = HALF-EXT-HEIGHT + (4 * ROAD-HEIGHT)
+THRESHOLD-HEIGHT = (HEIGHT / 2) + (4 * ROAD-HEIGHT)
+DANGEROUS-HEIGHT = 300
+CRITICAL-HEIGHT = 50
+NEW-ROAD-COUNT = 4
+
+DANGEROUS-HEIGHT-SCALE = 10
+RADIUS = 20
+COLLISION-THRESHOLD = 400
+
+SHIFT-FOR-POS-1 = -9.5
+SHIFT-FOR-POS-3 = -7.5
+SHIFT-FOR-POS-5 = -5.5
+SHIFT-FOR-POS-7 = -3.5
+SHIFT-FOR-POS-9 = -1.5
+SHIFT-FOR-POS-11 = 0.5
+SHIFT-FOR-POS-13 = 2.5
+SHIFT-FOR-POS-15 = 4.5
+SHIFT-FOR-POS-17 = 6.5
+SHIFT-FOR-POS-19 = 8.5
+SHIFT-FOR-POS-21 = 10.5
+
+
+road-image = rectangle(ROAD-WIDTH, ROAD-HEIGHT, "solid", "black")
+sidewalk-image = rectangle(ROAD-WIDTH, ROAD-HEIGHT, "solid", "white")
+
+data Freshman:
+  | freshman(pos :: Posn, display :: Image)
+end
+
+data Road: 
+  | road(pos :: Posn,
+      img-stream :: Stream<Image>, 
+      display :: Image)
+end
+
+data Direction:
+  | left
+  | right
+end
+
+data Vehicle:
+  | car(pos :: Option<Posn>,
+      dx :: Number, #the amount by which the car will move in the x direction per tick 
+      d-dx :: Number, #the amount by which dx will change each tick
+      dir :: Direction,
+      display :: Image)
+end
+
+data CrossyWorld:
+  | crossyworld(freshie :: Freshman,
+      rd :: Road,
+      cars :: List<Vehicle>,
+      warehouse-left :: List<Vehicle>,
+      warehouse-right :: List<Vehicle>,
+      score :: Number)
+end
+
+rec road-stream = lz-link(sidewalk-image, {(): lz-link(road-image, 
+      {(): road-stream})})
+
+
+fun make-roads(count :: Number, rd-stream :: Stream<Image>) -> {Image ; Stream<Image>}:
+  doc: "creates a display of count number of sidewalks/roads on a blank canvas"
+  make-roads-helper(count, rd-stream, empty-scene(ROAD-WIDTH, ROAD-HEIGHT * count))
+where:
+  make-roads(0, road-stream) is {empty-scene(ROAD-WIDTH, 0); road-stream}
+  make-roads(4, road-stream)
+    is {place-image(lz-first(lz-rest(lz-rest(lz-rest(road-stream)))),
+      HALF-WIDTH, HALF-ROAD-HEIGHT, 
+      place-image(lz-first(lz-rest(lz-rest(road-stream))), HALF-WIDTH, ROAD-HEIGHT * 3/2,
+        place-image(lz-first(lz-rest(road-stream)), HALF-WIDTH, ROAD-HEIGHT * 5/2,
+          place-image(lz-first(road-stream), HALF-WIDTH, ROAD-HEIGHT * 7/2,
+            empty-scene(ROAD-WIDTH, ROAD-HEIGHT * 4))))) ; 
+    lz-rest(lz-rest(lz-rest(lz-rest(road-stream))))}
+end
+
+fun is-positive(x :: Number)-> Boolean: x >= 0 end
+fun make-roads-helper(count :: Number%(is-positive), rd-stream :: Stream<Image>, bs-img :: Image) -> 
+  {Image ; Stream<Image>}:
+  doc: "creates a display of count number of sidewalks/roads on the canvas bs-img"
+  if count == 0:
+    {bs-img; rd-stream}
+  else:
+    make-roads-helper(count - 1, lz-rest(rd-stream),
+      place-image(lz-first(rd-stream), HALF-WIDTH, 
+        (ROAD-HEIGHT * (count - 1)) + HALF-ROAD-HEIGHT, bs-img))
+  end
+where:
+  make-roads-helper(0, road-stream, empty-scene(10, 10)) is {empty-scene(10, 10); road-stream}
+  make-roads-helper(4, road-stream, empty-scene(ROAD-WIDTH, ROAD-HEIGHT * 4))
+    is {place-image(lz-first(lz-rest(lz-rest(lz-rest(road-stream)))),
+      HALF-WIDTH, HALF-ROAD-HEIGHT, 
+      place-image(lz-first(lz-rest(lz-rest(road-stream))), HALF-WIDTH, ROAD-HEIGHT * 3/2,
+        place-image(lz-first(lz-rest(road-stream)), HALF-WIDTH, ROAD-HEIGHT * 5/2,
+          place-image(lz-first(road-stream), HALF-WIDTH, ROAD-HEIGHT * 7/2,
+            empty-scene(ROAD-WIDTH, ROAD-HEIGHT * 4))))) ; 
+    lz-rest(lz-rest(lz-rest(lz-rest(road-stream))))}
+end
+
+init-freshie = freshman(posn(HALF-WIDTH, HEIGHT - HALF-ROAD-HEIGHT), circle(20, "solid", "pink"))
+
+{rd-img ; rest-stream} = make-roads(22, road-stream)
+init-rd = road(posn(HALF-WIDTH, HALF-HEIGHT), rest-stream, rd-img)
+
+car-left = car(none, BASE-DX, 0, left, circle(20, "solid", "red"))
+car-left-2 = car(none, BASE-DX + 0.5, 0, left, circle(20, "solid", "red"))
+car-left-3 = car(none, BASE-DX + 0.2, 0.2, left, circle(20, "solid", "red"))
+car-left-4 = car(none, BASE-DX + 0.2, 0.2, left, circle(20, "solid", "red"))
+car-left-5 = car(none, BASE-DX + 0.3, 0.2, left, circle(20, "solid", "red"))
+car-left-6 = car(none, BASE-DX, 0.5, left, circle(20, "solid", "red"))
+left-warehouse = [list: car-left, car-left-2, car-left-3, car-left-4, car-left-5, car-left-6]
+
+car-right = car(none, BASE-DX, 0, right, circle(20, "solid", "blue"))
+car-right-2 = car(none, BASE-DX + 0.5, 0, right, circle(20, "solid", "blue"))
+car-right-3 = car(none, BASE-DX + 0.2, 0.2, right, circle(20, "solid", "blue"))
+car-right-4 = car(none, BASE-DX + 0.2, 0.2, right, circle(20, "solid", "blue"))
+car-right-5 = car(none, BASE-DX + 0.3, 0.2, right, circle(20, "solid", "blue"))
+car-right-6 = car(none, BASE-DX, 0.5, right, circle(20, "solid", "blue"))
+right-warehouse = [list: car-right, car-right-2, car-right-3, car-right-4, car-right-5, car-right-6]
+
+
+init-poss-left = [list: car-left]
+init-poss-right = [list: car-right]
+init-realm = crossyworld(init-freshie, init-rd, empty, init-poss-left, init-poss-right, 0)
+after-first-tick-realm = crossyworld(freshman(posn(HALF-WIDTH, HEIGHT + BASE-DOWN-SHIFT), 
+    init-freshie.display),
+  road(posn(HALF-WIDTH, HALF-HEIGHT + BASE-DOWN-SHIFT), rest-stream, rd-img),
+  [list: car(some(posn(HIDDEN-LEFT, HALF-HEIGHT + (SHIFT-FOR-POS-5 * ROAD-HEIGHT))), BASE-DX, 0,
+      right, circle(20, "solid", "blue")), car(some(posn(HIDDEN-LEFT, HALF-HEIGHT + (SHIFT-FOR-POS-13 * ROAD-HEIGHT))), BASE-DX, 0,
+      right, circle(20, "solid", "blue")), car(some(posn(HIDDEN-LEFT, HALF-HEIGHT + (SHIFT-FOR-POS-21 * ROAD-HEIGHT))), BASE-DX, 0,
+      right, circle(20, "solid", "blue"))],
+  init-poss-left, init-poss-right, 0)
+
+crs-in-action = [list: 
+  car(some(posn(10, HALF-ROAD-HEIGHT)), BASE-DX, 0, left, circle(20, "solid", "red")),
+  car(some(posn(300, HALF-ROAD-HEIGHT)), BASE-DX, 0, left, circle(20, "solid", "red")),
+  car(some(posn(500, HALF-ROAD-HEIGHT)), BASE-DX, 0, left, circle(20, "solid", "red")),
+  car(some(posn(750, HALF-ROAD-HEIGHT)), BASE-DX, 0, left, circle(20, "solid", "red")),
+  car(some(posn(150, ROAD-HEIGHT * 9/2)), BASE-DX, 0, left, circle(20, "solid", "red")),
+  car(some(posn(400, ROAD-HEIGHT * 9/2)), BASE-DX, 0, left, circle(20, "solid", "red")),
+  car(some(posn(790, ROAD-HEIGHT * 9/2)), BASE-DX, 0, left, circle(20, "solid", "red")),
+  car(some(posn(140, ROAD-HEIGHT * 17/2)), BASE-DX, 0, left, circle(20, "solid", "red")),
+  car(some(posn(400, ROAD-HEIGHT * 17/2)), BASE-DX, 0, left, circle(20, "solid", "red")),
+  car(some(posn(600, ROAD-HEIGHT * 17/2)), BASE-DX, 0, left, circle(20, "solid", "red")), 
+  car(some(posn(300, ROAD-HEIGHT * 5/2)), BASE-DX, 0, right, circle(20, "solid", "blue")),
+  car(some(posn(500, ROAD-HEIGHT * 5/2)), BASE-DX, 0, right, circle(20, "solid", "blue")),
+  car(some(posn(750, ROAD-HEIGHT * 5/2)), BASE-DX, 0, right, circle(20, "solid", "blue")),
+  car(some(posn(100, ROAD-HEIGHT * 13/2)), BASE-DX, 0, right, circle(20, "solid", "blue")),
+  car(some(posn(800, ROAD-HEIGHT * 13/2)), BASE-DX, 0, right, circle(20, "solid", "blue")),
+  car(some(posn(500, ROAD-HEIGHT * 13/2)), BASE-DX, 0, right, circle(20, "solid", "blue")),
+  car(some(posn(140, ROAD-HEIGHT * 21/2)), BASE-DX, 0, right, circle(20, "solid", "blue")),
+  car(some(posn(400, ROAD-HEIGHT * 21/2)), BASE-DX, 0, right, circle(20, "solid", "blue")),
+  car(some(posn(600, ROAD-HEIGHT * 21/2)), BASE-DX, 0, right, circle(20, "solid", "blue"))
+]
+
+full-realm = crossyworld(init-freshie, init-rd, crs-in-action, left-warehouse, right-warehouse, 0)
+
+realm-in-action = crossyworld(init-freshie, init-rd, [list: car-left, car-right], init-poss-left,
+  init-poss-right, 10)
+
+fun activate-cars(cars-in-action :: List<Vehicle>, possible-left :: List<Vehicle>%(is-link), 
+    possible-right :: List<Vehicle>%(is-link), road-position :: Posn) -> List<Vehicle>:
+  doc: ```if the road position is at a certain point, or satisfies a random test, activates cars
+       from the left-moving and right-moving possible car lists (both non-empty)
+       by appending them to cars-in-action and returning the new list```
+  y = road-position.y - HALF-HEIGHT
+  lucky-left-1 = possible-left.get(num-random(possible-left.length()))
+  lucky-left-2 = possible-left.get(num-random(possible-left.length()))
+  lucky-left-3 = possible-left.get(num-random(possible-left.length()))
+  lucky-left-list = [list: lucky-left-1, lucky-left-2, lucky-left-3]
+
+  lucky-right-1 = possible-right.get(num-random(possible-left.length()))
+  lucky-right-2 = possible-right.get(num-random(possible-left.length()))
+  lucky-right-3 = possible-right.get(num-random(possible-left.length()))
+  lucky-right-list = [list: lucky-right-1, lucky-right-2, lucky-right-3]
+  n = num-random(RANDOM-SIZE)
+  ask:
+    | (n == 1) then: #append right-moving cars
+      cars-in-action + map2({(cr, sh): 
+          car(some(posn(HIDDEN-LEFT, y + (sh * ROAD-HEIGHT))),
+            cr.dx, cr.d-dx, cr.dir, cr.display)}, lucky-right-list, 
+        [list: SHIFT-FOR-POS-5, SHIFT-FOR-POS-13, SHIFT-FOR-POS-21])
+    | (n == 2) then:
+      map2({(cr, sh): car(some(posn(HIDDEN-RIGHT, y + (sh * ROAD-HEIGHT))),
+            cr.dx, cr.d-dx, cr.dir, cr.display)}, lucky-left-list, 
+        [list: SHIFT-FOR-POS-3, SHIFT-FOR-POS-11, SHIFT-FOR-POS-19]) + cars-in-action
+    | (n == 4) then:
+      map2({(cr, sh): car(some(posn(HIDDEN-LEFT, y + (sh * ROAD-HEIGHT))),
+            cr.dx, cr.d-dx, cr.dir, cr.display)}, lucky-right-list, 
+        [list: SHIFT-FOR-POS-9, SHIFT-FOR-POS-17, SHIFT-FOR-POS-13]) + cars-in-action
+    | (n == 5) then:
+      map2({(cr, sh): car(some(posn(HIDDEN-RIGHT, y + (sh * ROAD-HEIGHT))),
+            cr.dx, cr.d-dx, cr.dir, cr.display)}, lucky-left-list, 
+        [list: SHIFT-FOR-POS-7, SHIFT-FOR-POS-3, SHIFT-FOR-POS-15]) + cars-in-action
+    | otherwise:
+      cars-in-action
+  end
+  #unfortunately, I did not know how to test this because the output is purely random
+end
+
+fun move-cars(cars :: List<Vehicle>) -> List<Vehicle>:
+  doc: ```shifts the position of each car according to its velocity. updates the 
+       velocity of the cars based on their acceleration```
+  map({(cr): 
+      cases (Option) cr.pos:
+        | none => cr
+        | some(p) => 
+          old-x = p.x
+          new-x = if is-left(cr.dir):
+            old-x - cr.dx
+          else: 
+            old-x + cr.dx
+          end
+          car(some(posn(new-x, p.y)), cr.dx + cr.d-dx, cr.d-dx, cr.dir, cr.display)
+      end}, filter({(cr): is-some(cr.pos)}, cars))
+where:
+  move-cars([list: ]) is empty
+  move-cars([list: car(some(posn(50, 50)), 0.5, 0, right, circle(10, "solid", "red")),
+      car(some(posn(50, 50)), 0.5, 0.01, left, circle(10, "solid", "red"))])
+    is [list: car(some(posn(50.5, 50)), 0.5, 0, right, circle(10, "solid", "red")),
+    car(some(posn(49.5, 50)), 0.51, 0.01, left, circle(10, "solid", "red"))]
+end
+
+fun shift-down(pos :: Posn, score :: Number, freshman-pos) -> Posn:
+  doc: ```shifts down the position by BASE-DOWN-SHIFT times a factor of the score. if the freshman
+       is near the top of the screen, shifts by a larger factor```
+  posn(pos.x, 
+    if freshman-pos.y < CRITICAL-HEIGHT:
+      HALF-HEIGHT
+    else if freshman-pos.y < DANGEROUS-HEIGHT:
+      pos.y + (DANGEROUS-HEIGHT-SCALE * BASE-DOWN-SHIFT)
+    else:
+      if (score * SCORE-SCALING-SHIFT-FACTOR) < SCORE-BY: pos.y + BASE-DOWN-SHIFT
+      else: pos.y + ((SCORE-SCALING-SHIFT-FACTOR * score) * BASE-DOWN-SHIFT)
+      end
+    end)
+where: 
+  shift-down(posn(HALF-WIDTH, HALF-HEIGHT),
+    0, posn(HALF-WIDTH, HALF-HEIGHT)) is posn(HALF-WIDTH, HALF-HEIGHT + BASE-DOWN-SHIFT)
+  shift-down(posn(HALF-WIDTH, HALF-HEIGHT), 20, posn(HALF-WIDTH, 50))
+    is posn(500, 352)
+  shift-down(posn(30, 20), 5,  posn(30, 20)) 
+is posn(30, 350)
+  shift-down(posn(0, 5), 100, posn(10, 500)) is posn(0, 5 + ((SCORE-SCALING-SHIFT-FACTOR * 100) * 
+      BASE-DOWN-SHIFT))
+end
+
+fun shift-down-realm(realm :: CrossyWorld) -> CrossyWorld:
+  doc: "shifts the road, freshman, and activated cars down"
+  crossyworld(freshman(shift-down(realm.freshie.pos, realm.score, realm.freshie.pos), 
+      realm.freshie.display),
+    road(shift-down(realm.rd.pos, realm.score, realm.freshie.pos), realm.rd.img-stream, 
+      realm.rd.display),
+    map({(cr): cases (Option) cr.pos:
+          | none => car(none, cr.dx, cr.d-dx, cr.dir, cr.display)
+          | some(p) => car(some(shift-down(p, realm.score, realm.freshie.pos)), cr.dx, cr.d-dx, 
+              cr.dir, cr.display)
+        end}, realm.cars),
+    realm.warehouse-left, realm.warehouse-right, realm.score)
+where:
+  shift-down-realm(init-realm) is crossyworld(freshman(posn(HALF-WIDTH, 675.2), 
+      init-realm.freshie.display),
+    road(posn(HALF-WIDTH, HALF-HEIGHT + BASE-DOWN-SHIFT), init-realm.rd.img-stream, 
+      init-realm.rd.display),
+    empty,
+    init-poss-left, init-poss-right, 0)
+  shift-down-realm(after-first-tick-realm) is 
+  crossyworld(freshman(posn(HALF-WIDTH, HEIGHT + (2 * BASE-DOWN-SHIFT)), 
+      after-first-tick-realm.freshie.display),
+    road(posn(HALF-WIDTH, HALF-HEIGHT + (2 * BASE-DOWN-SHIFT)), 
+      after-first-tick-realm.rd.img-stream, after-first-tick-realm.rd.display),
+    [list: 
+      car(some(posn(HIDDEN-LEFT, (HALF-HEIGHT + (SHIFT-FOR-POS-5 * ROAD-HEIGHT)) + 
+            BASE-DOWN-SHIFT)), BASE-DX, 0,
+        right, circle(20, "solid", "blue")),
+      car(some(posn(HIDDEN-LEFT, (HALF-HEIGHT + (SHIFT-FOR-POS-13 * ROAD-HEIGHT)) + 
+            BASE-DOWN-SHIFT)), BASE-DX, 0,
+        right, circle(20, "solid", "blue")),
+      car(some(posn(HIDDEN-LEFT, (HALF-HEIGHT + (SHIFT-FOR-POS-21 * ROAD-HEIGHT)) + 
+            BASE-DOWN-SHIFT)), BASE-DX, 0,
+        right, circle(20, "solid", "blue"))
+    ],
+    init-poss-left, init-poss-right, 0)
+end
+
+fun update-road(rd :: Road) -> Road:
+  doc: ```if the position of the road is past the threshold height, returns it to its 
+       baseline center position```
+  if (rd.pos.y >= THRESHOLD-HEIGHT):
+    amputated-image = place-image(rd.display, 
+      HALF-WIDTH, 
+      CENTER-PLUS-THRESHOLD, 
+      empty-scene(WIDTH, EXTENDED-HEIGHT))
+
+    {rdimg ; reststream} = make-roads(NEW-ROAD-COUNT, rd.img-stream) 
+    road(posn(HALF-WIDTH, HALF-HEIGHT),
+      rest-stream, place-image(rdimg, HALF-WIDTH, 2 * ROAD-HEIGHT, amputated-image))
+  else:
+    rd
+  end
+where:
+  update-road(init-realm.rd) is init-realm.rd
+  update-road(after-first-tick-realm.rd) is after-first-tick-realm.rd
+update-road(road(posn(HALF-WIDTH, THRESHOLD-HEIGHT), road-stream, init-realm.rd.display)).pos
+    is posn(HALF-WIDTH, HALF-HEIGHT)
+end
+
+fun on-each-tick(realm :: CrossyWorld) -> CrossyWorld:
+  doc: ```updates positions of the game components and potentially adds new activated cars 
+       to the realm```
+  down-shifted = shift-down-realm(realm)
+  cars-moved = move-cars(down-shifted.cars)
+  new-cars = activate-cars(cars-moved, down-shifted.warehouse-left, down-shifted.warehouse-right, 
+    down-shifted.rd.pos)
+  new-road = update-road(down-shifted.rd)
+  crossyworld(down-shifted.freshie, new-road, new-cars, realm.warehouse-left,
+    realm.warehouse-right, realm.score)
+where:
+  on-each-tick(init-realm) is crossyworld(freshman(posn(500, 675.2), init-freshie.display),
+road(posn(500, 350.2), init-rd.img-stream, init-rd.display), init-realm.cars, 
+    init-realm.warehouse-left, init-realm.warehouse-right, 0)
+  on-each-tick(realm-in-action).freshie is freshman(posn(500, 675.6), init-freshie.display)
+  on-each-tick(realm-in-action).rd is road(posn(500, 350.6), init-rd.img-stream, init-rd.display)
+  on-each-tick(realm-in-action).warehouse-left is realm-in-action.warehouse-left
+  on-each-tick(realm-in-action).warehouse-right is realm-in-action.warehouse-right
+end
+
+fun handle-key(realm :: CrossyWorld, k :: String) -> CrossyWorld:
+  doc: "moves the bird according to the arrow pressed"
+  x-pos = realm.freshie.pos.x
+  y-pos = realm.freshie.pos.y
+  ask: 
+    | (k == "w") or (k == "up") then:
+      crossyworld(freshman(posn(x-pos, y-pos - MOVE-BY), realm.freshie.display),
+        realm.rd, realm.cars, realm.warehouse-left, realm.warehouse-right, realm.score + SCORE-BY)
+    | (k == "a") or (k == "left") then:
+      crossyworld(freshman(posn(x-pos - MOVE-BY, y-pos), realm.freshie.display),
+        realm.rd, realm.cars, realm.warehouse-left, realm.warehouse-right, realm.score)
+    | (k == "d") or (k == "right") then:
+      crossyworld(freshman(posn(x-pos + MOVE-BY, y-pos), realm.freshie.display),
+        realm.rd, realm.cars, realm.warehouse-left, realm.warehouse-right, realm.score)   
+    | (k == "s") or (k == "down") then:
+      crossyworld(freshman(posn(x-pos, y-pos + MOVE-BY), realm.freshie.display),
+        realm.rd, realm.cars, realm.warehouse-left, realm.warehouse-right, realm.score - SCORE-BY)
+    | otherwise:
+      realm
+  end
+where:
+  handle-key(init-realm, "w") is 
+  crossyworld(freshman(posn(HALF-WIDTH, init-realm.freshie.pos.y - MOVE-BY), 
+      init-realm.freshie.display),
+    init-realm.rd, init-realm.cars, init-realm.warehouse-left, init-realm.warehouse-right,
+    init-realm.score + 1)
+  handle-key(init-realm, "a") is 
+  crossyworld(freshman(posn(init-realm.freshie.pos.x - MOVE-BY,init-realm.freshie.pos.y), 
+      init-realm.freshie.display),
+    init-realm.rd, init-realm.cars, init-realm.warehouse-left, init-realm.warehouse-right,
+    init-realm.score)
+  handle-key(init-realm, "d") is 
+  crossyworld(freshman(posn(init-realm.freshie.pos.x + MOVE-BY, init-realm.freshie.pos.y),
+      init-realm.freshie.display),
+    init-realm.rd, init-realm.cars, init-realm.warehouse-left, init-realm.warehouse-right,
+    init-realm.score)
+  handle-key(init-realm, "s") is 
+  crossyworld(freshman(posn(HALF-WIDTH, init-realm.freshie.pos.y + MOVE-BY), 
+      init-realm.freshie.display),
+    init-realm.rd, init-realm.cars, init-realm.warehouse-left, init-realm.warehouse-right,
+    init-realm.score - 1)
+  handle-key(init-realm, "up") is handle-key(init-realm, "w")
+  handle-key(init-realm, "left") is handle-key(init-realm, "a")
+  handle-key(init-realm, "right") is handle-key(init-realm, "d")
+  handle-key(init-realm, "down") is handle-key(init-realm, "s")
+end
+
+SCORE-BOX-WIDTH = 100
+SCORE-BOX-HEIGHT = 50
+TEXT-SIZE = 24
+HALF-SCORE-BOX-WIDTH = SCORE-BOX-WIDTH / 2
+HALF-SCORE-BOX-HEIGHT = SCORE-BOX-HEIGHT / 2
+
+fun produce-image(realm :: CrossyWorld) -> Image:
+  doc: "creates an image out of the crossyworld realm provided"
+  place-image(realm.freshie.display, 
+    realm.freshie.pos.x,
+    realm.freshie.pos.y,
+    place-image(overlay(text-font(string-append("SCORE: ", num-to-string(realm.score)),
+          TEXT-SIZE, "black", "Treasure Map Deadhand", "default", "normal", "bold", false),
+        rectangle(SCORE-BOX-WIDTH, SCORE-BOX-HEIGHT, "solid", "white")),
+      HALF-SCORE-BOX-WIDTH, HALF-SCORE-BOX-HEIGHT,
+      fold({(img, cr): cases (Option) cr.pos:
+            | none => img
+            | some(p) => place-image(cr.display,
+                p.x, p.y, img)
+          end}, place-image(realm.rd.display, realm.rd.pos.x, realm.rd.pos.y,
+          empty-scene(WIDTH, HEIGHT)), realm.cars)))
+where:
+  produce-image(init-realm) is place-image(init-realm.freshie.display, 
+    init-realm.freshie.pos.x,
+    init-realm.freshie.pos.y,
+    place-image(overlay(text-font(string-append("SCORE: ", num-to-string(init-realm.score)),
+          24, "black", "Treasure Map Deadhand", "default", "normal", "bold", false),
+        rectangle(SCORE-BOX-WIDTH, SCORE-BOX-HEIGHT, "solid", "white")),
+      HALF-SCORE-BOX-WIDTH, HALF-SCORE-BOX-HEIGHT,
+      fold({(img, cr): cases (Option) cr.pos:
+            | none => img
+            | some(p) => place-image(cr.display,
+                p.x, p.y, img)
+          end}, place-image(init-realm.rd.display, init-realm.rd.pos.x, init-realm.rd.pos.y,
+          empty-scene(WIDTH, HEIGHT)), init-realm.cars)))
+  produce-image(after-first-tick-realm) is place-image(after-first-tick-realm.freshie.display, 
+    after-first-tick-realm.freshie.pos.x,
+    after-first-tick-realm.freshie.pos.y,
+    place-image(overlay(text-font(string-append("SCORE: ", 
+            num-to-string(after-first-tick-realm.score)),
+          24, "black", "Treasure Map Deadhand", "default", "normal", "bold", false),
+        rectangle(SCORE-BOX-WIDTH, SCORE-BOX-HEIGHT, "solid", "white")),
+      HALF-SCORE-BOX-WIDTH, HALF-SCORE-BOX-HEIGHT,
+      fold({(img, cr): cases (Option) cr.pos:
+            | none => img
+            | some(p) => place-image(cr.display,
+                p.x, p.y, img)
+          end}, place-image(after-first-tick-realm.rd.display, after-first-tick-realm.rd.pos.x, 
+          after-first-tick-realm.rd.pos.y,
+          empty-scene(WIDTH, HEIGHT)), after-first-tick-realm.cars)))
+end
+
+fun collision-occurs(realm :: CrossyWorld) -> Boolean:
+  doc: "returns true if freshman collides with vehicle, false otherwise"
+  frsh-x = realm.freshie.pos.x
+  frsh-y = realm.freshie.pos.y
+  any({(c): cases (Option) c.pos: 
+        | none => false  
+        | some(p) => (num-sqr(p.x - frsh-x) <= COLLISION-THRESHOLD ) and 
+          (num-sqr(p.y - frsh-y) <= COLLISION-THRESHOLD)
+      end}, realm.cars) or (realm.freshie.pos.y > (HEIGHT + RADIUS))
+where:
+  init-realm violates collision-occurs
+  after-first-tick-realm violates collision-occurs
+  crossyworld(freshman(posn(500, 500), init-freshie.display),
+    road(posn(500, 350), road-stream, init-rd.display),
+    [list: car(some(posn(515, 520)), 0, 0, right, car-right.display)],
+    empty, empty, 0) satisfies collision-occurs
+  crossyworld(freshman(posn(500, 500), init-freshie.display),
+    road(posn(500, 350), road-stream, init-rd.display),
+    [list: car(none, 
+        car-right.dx, car-right.d-dx, right, car-right.display),
+      car(some(posn(515, 520)), 0, 0, right, car-right.display)],
+    empty, empty, 0) satisfies collision-occurs
+end
+
+r = reactor:
+  init: full-realm,
+  on-tick: on-each-tick,
+  seconds-per-tick: 0.0025,
+  on-key: handle-key,
+  to-draw: produce-image,
+  stop-when: collision-occurs,
+  close-when-stop: true
+end
+
+
+interact(r)
